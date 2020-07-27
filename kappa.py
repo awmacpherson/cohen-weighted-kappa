@@ -4,66 +4,38 @@ class CohenKappa(tf.keras.metrics.Metric):
     def __init__(self, 
                  num_classes, 
                  sparse_input=True,  # true values
-                 normalized_input=False, # predicted values
+                 weights='quadratic',
                  **kwargs):
         super().__init__(**kwargs)
         self.num_classes = num_classes
-        self._conf_mat_shape = tf.TensorShape((num_classes, num_classes))
-        
+        self.weights = weights
+        self._shape = tf.TensorShape((num_classes, num_classes))
         self.sparse_input = sparse_input
-        if sparse_input:
-            self._to_categorical = tf.keras.utils.to_categorical
-            
-        self.normalized_input = normalized_input
-        if not normalized_input:
-            self._normalize = tf.linalg.normalize
 
-        self.count = self.add_weight(name="count",
-                                     initializer="zeros")
-        self.conf_mat = self.add_weight(name="confusion matrix",     
-                                        shape=self._conf_mat_shape,
-                                        initializer="zeros")
+        self.confusion = self.add_weight(name="confusion matrix",     
+                                         shape=self._shape,
+                                         initializer="zeros")
                                         
     def reset_states(self):
         """
         Overriding super().reset_states because it 
-        does not appear to support non-scalar weights.
+        does not support non-scalar weights.
         """
-        self.count.assign(0)
-        self.conf_mat.assign(tf.zeros(self._conf_mat_shape))
+        self.confusion.assign(tf.zeros(self._shape))
 
     def update_state(self, true, pred, sample_weight=None):
-        true = tf.convert_to_tensor(true)
-        pred = tf.convert_to_tensor(pred)
-        self._last_true = true
-        if self.sparse_input:# and true.shape[0] is not None:
-            true = tf.one_hot(tf.cast(true, tf.uint8), depth=self.num_classes)
-            
-        self._last_true = true
+        if self.sparse_input:
+            true = one_hot(true, depth=self.num_classes)
+          
+        pred = discretize(pred)
         
-        if not self.normalized_input:
-            pred = self._normalize(pred)[0]
-        
-        self._last_pred = pred
-        
-        assert pred.shape == true.shape
-        
-        self._last_count = pred.shape[0]
-        if self._last_count is not None:
-            self.count.assign_add(self._last_count)
-        
-        self.conf_mat.assign_add(
-            tf.matmul(
-                tf.reshape(tf.reduce_sum(pred, axis=0), (self.num_classes,1)),
-                tf.reshape(tf.reduce_sum(true, axis=0), (1,self.num_classes))
-            )
-        )
+        self.confusion.assign_add(confusion(true, pred)
 
     def result(self):
-        return kappa(self.conf_mat, self.count, N=self.num_classes)
+        return kappa(self.confusion, weights=self.weights)
 
-def kappa(conf_mat, count, N=5, weights=None):
-    assert conf_mat.shape == (N, N)
+def kappa(confusion, weights=None):
+    N = tf.shape(confusion)[0]
     # Allow users to pass a predefined weight matrix.
     if weights == 'quadratic':
         idx = tf.range(N, dtype='float32')[:, None]
@@ -77,15 +49,24 @@ def kappa(conf_mat, count, N=5, weights=None):
     elif weights.shape != (N, N):
         raise ValueError("Weight matrix must be square with N rows.")
         
+    pred = tf.reduce_sum(confusion, axis=1, keepdims=True)
+    true = tf.reduce_sum(confusion, axis=0, keepdims=True)
+    count = tf.reduce_sum(confusion)
+    expected = pred_ratio * true / count
     
-    pred_total = tf.reduce_sum(conf_mat, axis=1, keepdims=True)
-    true_total = tf.reduce_sum(conf_mat, axis=0, keepdims=True)
-    
-    pred_ratio = pred / count
-    true_ratio = true / count
-    expect = pred_ratio * true_ratio
-        
-    conf_mat_ratio = conf_mat / count
-    
-    return 1 - (tf.reduce_sum(weights * conf_mat_ratio) / \
-                tf.reduce_sum(weights * expect) )
+    return 1 - (tf.reduce_sum(weights * confusion) / \
+                tf.reduce_sum(weights * expected) )
+
+# Utility functions
+
+def one_hot(z, depth):
+    """One-hot encoding for a batch of scalars with dtype float32."""
+    return tf.one_hot(tf.cast(z, tf.uint8), depth=depth)[:,0,:]
+
+def discretize(z):
+    z_class = tf.argmax(z, axis=-1)
+    return tf.one_hot(z_class, depth=tf.shape(z)[-1])
+
+def confusion(y_1, y_2):
+    return tf.matmul( tf.transpose(tf.reduce_sum(y_1, axis=0, keepdims=True)),
+                      tf.reduce_sum(y_2, axis=0, keepdims=True) )
