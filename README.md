@@ -2,7 +2,7 @@ Keras implementation of Cohen weighted kappa statistic derived from tf.keras.met
 
 ## Usage
 
-Instantiate in a Keras project and pass to the list of metrics argument of Model.compile(). 
+Instantiate in a Keras project and pass to the list of metrics argument of `Model.compile()`. 
 
 For example:
 
