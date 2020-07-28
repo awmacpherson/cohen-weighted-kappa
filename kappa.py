@@ -1,3 +1,5 @@
+import tensorflow as tf
+
 class CohenKappa(tf.keras.metrics.Metric):
     """Cohen quadratic weighted kappa implementation for Keras."""
     
